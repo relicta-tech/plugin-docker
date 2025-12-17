@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: darwin
+            goarch: arm64
+            suffix: darwin_aarch64
+          - goos: darwin
+            goarch: amd64
+            suffix: darwin_x86_64
+          - goos: linux
+            goarch: arm64
+            suffix: linux_aarch64
+          - goos: linux
+            goarch: amd64
+            suffix: linux_x86_64
+          - goos: windows
+            goarch: amd64
+            suffix: windows_x86_64
+            ext: .exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          go build -ldflags="-s -w" -o docker_${{ matrix.suffix }}${{ matrix.ext }}
+
+      - name: Package (Unix)
+        if: matrix.goos != 'windows'
+        run: |
+          tar -czvf docker_${{ matrix.suffix }}.tar.gz docker_${{ matrix.suffix }}
+
+      - name: Package (Windows)
+        if: matrix.goos == 'windows'
+        run: |
+          zip docker_${{ matrix.suffix }}.zip docker_${{ matrix.suffix }}.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker_${{ matrix.suffix }}
+          path: docker_${{ matrix.suffix }}.*
+
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release
+          find dist -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} release/ \;
+
+      - name: Generate checksums
+        run: |
+          cd release
+          sha256sum * > checksums.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/*.tar.gz
+            release/*.zip
+            release/checksums.txt
+          generate_release_notes: true
