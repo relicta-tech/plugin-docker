@@ -7,11 +7,123 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/relicta-tech/relicta-plugin-sdk/helpers"
 	"github.com/relicta-tech/relicta-plugin-sdk/plugin"
 )
+
+// Security validation patterns
+var (
+	// Docker image name pattern: [registry/]name[:tag]
+	// Allows: alphanumerics, dots, dashes, underscores, forward slashes, colons
+	imageNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/-]*[a-zA-Z0-9]$`)
+
+	// Tag pattern: alphanumerics, dots, dashes, underscores
+	tagPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+
+	// Registry pattern: hostname with optional port
+	registryPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.-]*(:[0-9]+)?$`)
+
+	// Build arg key pattern: alphanumerics and underscores (environment variable style)
+	buildArgKeyPattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+	// Label key pattern: OCI standard allows reverse-DNS style with dots, dashes
+	// e.g., org.opencontainers.image.source, com.example.my-label
+	labelKeyPattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9._-]*[a-zA-Z0-9]$`)
+)
+
+// validateImageName validates a Docker image name.
+func validateImageName(name string) error {
+	if name == "" {
+		return fmt.Errorf("image name cannot be empty")
+	}
+	if len(name) > 256 {
+		return fmt.Errorf("image name too long (max 256 characters)")
+	}
+	if !imageNamePattern.MatchString(name) {
+		return fmt.Errorf("invalid image name: contains disallowed characters")
+	}
+	// Check for path traversal attempts
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("image name cannot contain '..'")
+	}
+	return nil
+}
+
+// validateTag validates a Docker image tag.
+func validateTag(tag string) error {
+	if tag == "" {
+		return fmt.Errorf("tag cannot be empty")
+	}
+	if len(tag) > 128 {
+		return fmt.Errorf("tag too long (max 128 characters)")
+	}
+	if !tagPattern.MatchString(tag) {
+		return fmt.Errorf("invalid tag: contains disallowed characters")
+	}
+	return nil
+}
+
+// validateRegistry validates a Docker registry URL.
+func validateRegistry(registry string) error {
+	if registry == "" || registry == "docker.io" {
+		return nil
+	}
+	if len(registry) > 256 {
+		return fmt.Errorf("registry URL too long")
+	}
+	if !registryPattern.MatchString(registry) {
+		return fmt.Errorf("invalid registry URL format")
+	}
+	return nil
+}
+
+// validateBuildArgKey validates a build argument key.
+func validateBuildArgKey(key string) error {
+	if !buildArgKeyPattern.MatchString(key) {
+		return fmt.Errorf("invalid build arg key: must be alphanumeric with underscores")
+	}
+	return nil
+}
+
+// validateLabelKey validates a Docker label key.
+func validateLabelKey(key string) error {
+	if key == "" {
+		return fmt.Errorf("label key cannot be empty")
+	}
+	if len(key) > 256 {
+		return fmt.Errorf("label key too long (max 256 characters)")
+	}
+	if !labelKeyPattern.MatchString(key) {
+		return fmt.Errorf("invalid label key: must be alphanumeric with dots, dashes, or underscores")
+	}
+	return nil
+}
+
+// validatePath validates a file path to prevent path traversal.
+func validatePath(path string) error {
+	if path == "" {
+		return nil
+	}
+
+	// Clean the path
+	cleaned := filepath.Clean(path)
+
+	// Check for absolute paths (potential escape from working directory)
+	if filepath.IsAbs(cleaned) {
+		return fmt.Errorf("absolute paths are not allowed")
+	}
+
+	// Check for path traversal attempts
+	if strings.HasPrefix(cleaned, "..") || strings.Contains(cleaned, string(filepath.Separator)+"..") {
+		return fmt.Errorf("path traversal detected: cannot use '..' to escape working directory")
+	}
+
+	return nil
+}
 
 // CommandExecutor abstracts command execution for testability.
 type CommandExecutor interface {
@@ -112,6 +224,55 @@ func (p *DockerPlugin) Execute(ctx context.Context, req plugin.ExecuteRequest) (
 }
 
 func (p *DockerPlugin) buildAndPush(ctx context.Context, cfg *Config, releaseCtx plugin.ReleaseContext, dryRun bool) (*plugin.ExecuteResponse, error) {
+	// Security validation
+	if err := validateImageName(cfg.Image); err != nil {
+		return &plugin.ExecuteResponse{
+			Success: false,
+			Error:   fmt.Sprintf("invalid image configuration: %v", err),
+		}, nil
+	}
+
+	if err := validateRegistry(cfg.Registry); err != nil {
+		return &plugin.ExecuteResponse{
+			Success: false,
+			Error:   fmt.Sprintf("invalid registry configuration: %v", err),
+		}, nil
+	}
+
+	if err := validatePath(cfg.Dockerfile); err != nil {
+		return &plugin.ExecuteResponse{
+			Success: false,
+			Error:   fmt.Sprintf("invalid dockerfile path: %v", err),
+		}, nil
+	}
+
+	if err := validatePath(cfg.Context); err != nil {
+		return &plugin.ExecuteResponse{
+			Success: false,
+			Error:   fmt.Sprintf("invalid build context path: %v", err),
+		}, nil
+	}
+
+	// Validate build args keys
+	for key := range cfg.BuildArgs {
+		if err := validateBuildArgKey(key); err != nil {
+			return &plugin.ExecuteResponse{
+				Success: false,
+				Error:   fmt.Sprintf("invalid build arg key '%s': %v", key, err),
+			}, nil
+		}
+	}
+
+	// Validate label keys
+	for key := range cfg.Labels {
+		if err := validateLabelKey(key); err != nil {
+			return &plugin.ExecuteResponse{
+				Success: false,
+				Error:   fmt.Sprintf("invalid label key '%s': %v", key, err),
+			}, nil
+		}
+	}
+
 	version := strings.TrimPrefix(releaseCtx.Version, "v")
 	parts := strings.Split(version, ".")
 
@@ -138,6 +299,19 @@ func (p *DockerPlugin) buildAndPush(ctx context.Context, cfg *Config, releaseCtx
 		resolved = strings.ReplaceAll(resolved, "{{major}}", major)
 		resolved = strings.ReplaceAll(resolved, "{{minor}}", minor)
 		resolved = strings.ReplaceAll(resolved, "{{patch}}", patch)
+
+		// Skip empty tags (e.g., when {{patch}} resolves to empty string)
+		if resolved == "" {
+			continue
+		}
+
+		// Validate resolved tag
+		if err := validateTag(resolved); err != nil {
+			return &plugin.ExecuteResponse{
+				Success: false,
+				Error:   fmt.Sprintf("invalid tag '%s': %v", resolved, err),
+			}, nil
+		}
 		resolvedTags = append(resolvedTags, resolved)
 	}
 
@@ -306,9 +480,60 @@ func (p *DockerPlugin) Validate(_ context.Context, config map[string]any) (*plug
 	vb := helpers.NewValidationBuilder()
 	parser := helpers.NewConfigParser(config)
 
+	// Validate image name
 	image := parser.GetString("image", "", "")
 	if image == "" {
 		vb.AddError("image", "Docker image name is required")
+	} else if err := validateImageName(image); err != nil {
+		vb.AddError("image", err.Error())
+	}
+
+	// Validate registry if provided
+	registry := parser.GetString("registry", "", "docker.io")
+	if err := validateRegistry(registry); err != nil {
+		vb.AddError("registry", err.Error())
+	}
+
+	// Validate dockerfile path
+	dockerfile := parser.GetString("dockerfile", "", "Dockerfile")
+	if err := validatePath(dockerfile); err != nil {
+		vb.AddError("dockerfile", err.Error())
+	}
+
+	// Validate context path
+	contextPath := parser.GetString("context", "", ".")
+	if err := validatePath(contextPath); err != nil {
+		vb.AddError("context", err.Error())
+	}
+
+	// Validate build args keys
+	if buildArgs, ok := config["build_args"].(map[string]any); ok {
+		for key := range buildArgs {
+			if err := validateBuildArgKey(key); err != nil {
+				vb.AddError("build_args", fmt.Sprintf("invalid key '%s': %s", key, err.Error()))
+			}
+		}
+	}
+
+	// Validate label keys
+	if labels, ok := config["labels"].(map[string]any); ok {
+		for key := range labels {
+			if err := validateLabelKey(key); err != nil {
+				vb.AddError("labels", fmt.Sprintf("invalid key '%s': %s", key, err.Error()))
+			}
+		}
+	}
+
+	// Validate tags
+	tags := parser.GetStringSlice("tags", nil)
+	for _, tag := range tags {
+		// Skip template tags, they'll be validated at runtime
+		if strings.Contains(tag, "{{") {
+			continue
+		}
+		if err := validateTag(tag); err != nil {
+			vb.AddError("tags", fmt.Sprintf("invalid tag '%s': %s", tag, err.Error()))
+		}
 	}
 
 	return vb.Build(), nil

@@ -14,11 +14,11 @@ import (
 
 // MockCommandExecutor is a mock implementation of CommandExecutor for testing.
 type MockCommandExecutor struct {
-	RunFunc      func(ctx context.Context, name string, args []string, stdin io.Reader) error
-	RunCalls     []MockRunCall
-	FailOnCall   int  // Which call number should fail (1-indexed, 0 means never fail)
-	callCount    int
-	FailWithErr  error
+	RunFunc     func(ctx context.Context, name string, args []string, stdin io.Reader) error
+	RunCalls    []MockRunCall
+	FailOnCall  int // Which call number should fail (1-indexed, 0 means never fail)
+	callCount   int
+	FailWithErr error
 }
 
 // MockRunCall records a call to Run.
@@ -717,11 +717,11 @@ func TestDockerLogin(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
-		name           string
-		cfg            *Config
-		expectedArgs   []string
-		expectedStdin  string
-		expectedErr    bool
+		name          string
+		cfg           *Config
+		expectedArgs  []string
+		expectedStdin string
+		expectedErr   bool
 	}{
 		{
 			name: "login to default registry",
@@ -796,11 +796,11 @@ func TestDockerBuild(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
-		name         string
-		cfg          *Config
-		imageNames   []string
-		releaseCtx   plugin.ReleaseContext
-		checkArgs    func(t *testing.T, args []string)
+		name       string
+		cfg        *Config
+		imageNames []string
+		releaseCtx plugin.ReleaseContext
+		checkArgs  func(t *testing.T, args []string)
 	}{
 		{
 			name: "basic build",
@@ -1027,19 +1027,19 @@ func TestBuildAndPushVersionParsing(t *testing.T) {
 			name:         "semver without patch",
 			version:      "v1.2",
 			tags:         []any{"{{version}}", "{{major}}", "{{minor}}", "{{patch}}"},
-			expectedTags: []string{"1.2", "1", "2", ""},
+			expectedTags: []string{"1.2", "1", "2"}, // {{patch}} resolves to empty, filtered out
 		},
 		{
 			name:         "major only",
 			version:      "v1",
 			tags:         []any{"{{version}}", "{{major}}", "{{minor}}", "{{patch}}"},
-			expectedTags: []string{"1", "1", "", ""},
+			expectedTags: []string{"1", "1"}, // {{minor}} and {{patch}} resolve to empty, filtered out
 		},
 		{
 			name:         "empty version parts",
 			version:      "v",
 			tags:         []any{"{{version}}", "{{major}}"},
-			expectedTags: []string{"", ""},
+			expectedTags: []string{}, // both resolve to empty, filtered out
 		},
 	}
 
