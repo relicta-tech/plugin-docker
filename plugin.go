@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -12,8 +13,37 @@ import (
 	"github.com/relicta-tech/relicta-plugin-sdk/plugin"
 )
 
+// CommandExecutor abstracts command execution for testability.
+type CommandExecutor interface {
+	Run(ctx context.Context, name string, args []string, stdin io.Reader) error
+}
+
+// RealCommandExecutor executes actual system commands.
+type RealCommandExecutor struct{}
+
+// Run executes the command with the given arguments.
+func (e *RealCommandExecutor) Run(ctx context.Context, name string, args []string, stdin io.Reader) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	if stdin != nil {
+		cmd.Stdin = stdin
+	}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
 // DockerPlugin implements the Docker container registry plugin.
-type DockerPlugin struct{}
+type DockerPlugin struct {
+	executor CommandExecutor
+}
+
+// getExecutor returns the command executor, defaulting to RealCommandExecutor.
+func (p *DockerPlugin) getExecutor() CommandExecutor {
+	if p.executor != nil {
+		return p.executor
+	}
+	return &RealCommandExecutor{}
+}
 
 // Config represents the Docker plugin configuration.
 type Config struct {
@@ -182,11 +212,7 @@ func (p *DockerPlugin) dockerLogin(ctx context.Context, cfg *Config) error {
 	}
 	args = append(args, "-u", cfg.Username, "--password-stdin")
 
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	cmd.Stdin = strings.NewReader(cfg.Password)
-	cmd.Stderr = os.Stderr
-
-	return cmd.Run()
+	return p.getExecutor().Run(ctx, "docker", args, strings.NewReader(cfg.Password))
 }
 
 func (p *DockerPlugin) dockerBuild(ctx context.Context, cfg *Config, imageNames []string, releaseCtx plugin.ReleaseContext) error {
@@ -233,19 +259,11 @@ func (p *DockerPlugin) dockerBuild(ctx context.Context, cfg *Config, imageNames 
 	}
 	args = append(args, buildContext)
 
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	return cmd.Run()
+	return p.getExecutor().Run(ctx, "docker", args, nil)
 }
 
 func (p *DockerPlugin) dockerPush(ctx context.Context, imageName string) error {
-	cmd := exec.CommandContext(ctx, "docker", "push", imageName)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	return cmd.Run()
+	return p.getExecutor().Run(ctx, "docker", []string{"push", imageName}, nil)
 }
 
 func (p *DockerPlugin) parseConfig(raw map[string]any) *Config {
