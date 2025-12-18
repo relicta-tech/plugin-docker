@@ -1,0 +1,25 @@
+#!/bin/bash
+# Pre-commit hook for Go projects
+# Runs go mod tidy, tests, and linting before commit
+
+set -e
+
+echo "Running pre-commit checks..."
+
+# Check if go.mod has changed and verify it's tidy
+echo "Checking go.mod is tidy..."
+go mod tidy
+if ! git diff --exit-code go.mod go.sum >/dev/null 2>&1; then
+    echo "ERROR: go.mod or go.sum is not tidy. Please run 'go mod tidy' and stage the changes."
+    exit 1
+fi
+
+# Run tests
+echo "Running tests..."
+go test -race ./...
+
+# Run linter
+echo "Running golangci-lint..."
+golangci-lint run
+
+echo "All pre-commit checks passed!"
