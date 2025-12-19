@@ -7,6 +7,11 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
+
+env:
+  PLUGIN_NAME: plugin-docker
 
 jobs:
   build:
@@ -31,45 +36,56 @@ jobs:
             goarch: amd64
             suffix: windows_x86_64
             ext: .exe
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v6
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "1.24"
+          cache: true
 
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
         run: |
-          go build -ldflags="-s -w" -o docker_${{ matrix.suffix }}${{ matrix.ext }}
+          go build -ldflags="-s -w -X main.Version=${{ github.ref_name }}" \
+            -o ${{ env.PLUGIN_NAME }}_${{ matrix.suffix }}${{ matrix.ext }}
 
       - name: Package (Unix)
         if: matrix.goos != 'windows'
         run: |
-          tar -czvf docker_${{ matrix.suffix }}.tar.gz docker_${{ matrix.suffix }}
+          tar -czvf ${{ env.PLUGIN_NAME }}_${{ matrix.suffix }}.tar.gz \
+            ${{ env.PLUGIN_NAME }}_${{ matrix.suffix }}
 
       - name: Package (Windows)
         if: matrix.goos == 'windows'
         run: |
-          zip docker_${{ matrix.suffix }}.zip docker_${{ matrix.suffix }}.exe
+          zip ${{ env.PLUGIN_NAME }}_${{ matrix.suffix }}.zip \
+            ${{ env.PLUGIN_NAME }}_${{ matrix.suffix }}.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: docker_${{ matrix.suffix }}
-          path: docker_${{ matrix.suffix }}.*
+          name: ${{ env.PLUGIN_NAME }}_${{ matrix.suffix }}
+          path: ${{ env.PLUGIN_NAME }}_${{ matrix.suffix }}.*
 
   release:
     name: Release
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v4
         with:
           path: dist
 
@@ -79,15 +95,23 @@ jobs:
           find dist -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} release/ \;
 
       - name: Generate checksums
+        working-directory: release
         run: |
-          cd release
-          sha256sum * > checksums.txt
+          sha256sum *.tar.gz *.zip > checksums.txt
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+      - name: Generate attestations
+        uses: actions/attest-build-provenance@v2
         with:
-          files: |
-            release/*.tar.gz
-            release/*.zip
-            release/checksums.txt
-          generate_release_notes: true
+          subject-path: |
+            release/${{ env.PLUGIN_NAME }}_darwin_aarch64.tar.gz
+            release/${{ env.PLUGIN_NAME }}_darwin_x86_64.tar.gz
+            release/${{ env.PLUGIN_NAME }}_linux_aarch64.tar.gz
+            release/${{ env.PLUGIN_NAME }}_linux_x86_64.tar.gz
+            release/${{ env.PLUGIN_NAME }}_windows_x86_64.zip
+
+      - name: Release with Relicta
+        uses: relicta-tech/relicta-action@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          command: publish
+          plugins: github

@@ -1,0 +1,38 @@
+# Relicta Release Configuration
+# https://github.com/relicta-tech/relicta
+
+versioning:
+  strategy: conventional
+  tag_prefix: v
+  git_tag: true
+  git_push: true
+
+changelog:
+  enabled: true
+  file: CHANGELOG.md
+  format: conventional
+  repository_url: https://github.com/relicta-tech/plugin-docker
+
+plugins:
+  - name: github
+    enabled: true
+    config:
+      draft: false
+      prerelease: false
+      generate_release_notes: false
+      assets:
+        # Linux binaries
+        - "release/plugin-docker_linux_aarch64.tar.gz"
+        - "release/plugin-docker_linux_x86_64.tar.gz"
+        # macOS binaries
+        - "release/plugin-docker_darwin_aarch64.tar.gz"
+        - "release/plugin-docker_darwin_x86_64.tar.gz"
+        # Windows binaries
+        - "release/plugin-docker_windows_x86_64.zip"
+        # Checksums
+        - "release/checksums.txt"
+
+workflow:
+  require_approval: false
+  allowed_branches:
+    - main
