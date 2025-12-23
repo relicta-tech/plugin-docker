@@ -110,7 +110,7 @@ jobs:
             release/${{ env.PLUGIN_NAME }}_windows_x86_64.zip
 
       - name: Release with Relicta
-        uses: relicta-tech/relicta-action@v1
+        uses: relicta-tech/relicta-action@v2
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           command: publish
